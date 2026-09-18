@@ -1,0 +1,3 @@
+# carla 클라이언트 버전은 원격 서버의 CARLA 버전과 정확히 맞춰야 함, 예: carla==0.9.15
+carla
+pyyaml

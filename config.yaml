@@ -1,0 +1,26 @@
+# CARLA server connection
+server:
+  host: "127.0.0.1"   # 원격 서버 IP로 교체
+  port: 2000
+  timeout: 10.0        # seconds
+
+# Optional: 특정 맵으로 전환 (null이면 서버에 이미 로드된 맵 사용)
+map: null
+
+# 시각화에 사용할 차량 blueprint
+vehicle:
+  blueprint: "vehicle.tesla.model3"
+  z_offset: 0.3         # 지면 클리핑 방지용 스폰 높이 보정 (m)
+
+# 좌표계 변환: Julia가 오른손 좌표계(x: forward, y: left, yaw: CCW, rad)로
+# trajectory를 낸다고 가정. CARLA는 왼손 좌표계(x: forward, y: right, yaw: CW, deg)이므로
+# 기본값으로 y와 yaw 부호를 뒤집음. Julia 쪽 convention이 다르면 여기서 끄면 됨.
+coordinate_transform:
+  flip_y: true
+  negate_yaw: true
+
+# 재생 설정
+playback:
+  speed_factor: 1.0     # 1.0 = trajectory의 timestamp 그대로, 2.0 = 2배속
+  follow_camera: true    # spectator가 차량을 따라가도록
+  show_speed_label: true

@@ -1,0 +1,14 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Julia
+Manifest.toml
+
+# local overrides (e.g. real remote host/port, credentials)
+config.local.yaml
