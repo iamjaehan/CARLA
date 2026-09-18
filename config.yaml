@@ -1,6 +1,7 @@
 # CARLA server connection
+# 원격 머신: ssh ji5332@ase-a71908.ece.utexas.edu, ~/Documents/carla 에서 CarlaUE4.sh 실행
 server:
-  host: "127.0.0.1"   # 원격 서버 IP로 교체
+  host: "ase-a71908.ece.utexas.edu"
   port: 2000
   timeout: 10.0        # seconds
 

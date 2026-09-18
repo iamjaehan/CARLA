@@ -28,19 +28,26 @@ python/replay.py             CARLA 접속, 차량 스폰, physics 끄고 waypoin
 - 속도는 `world.debug.draw_string`으로 차량 위에 텍스트 표시만 함 (v0). 화살표/바퀴 회전 등은 미구현.
 
 ## 원격 환경
-- CARLA 서버(시뮬레이터 본체)는 별도 원격 Linux/Windows 머신에서 실행 (GPU 필요, macOS는 공식
-  미지원). 접속은 평소 쓰던 SSH.
+- CARLA 서버(시뮬레이터 본체)는 별도 원격 머신에서 실행 (GPU 필요, macOS는 공식 미지원).
+  접속: `ssh ji5332@ase-a71908.ece.utexas.edu`
+- CARLA 설치 위치: 그 머신의 `~/Documents/carla`, 실행은 그 안의 `.sh` 스크립트
+  (보통 `CarlaUE4.sh`, 정확한 파일명은 `ls ~/Documents/carla`로 확인).
+- CARLA 버전: **0.9.16** → `requirements.txt`에 `carla==0.9.16`으로 고정해둠.
 - 원격 머신에 모니터가 물리적으로 연결돼 있어서, CarlaUE4 창은 그 모니터에 렌더링됨.
   SSH만으로는 화면이 안 보이므로 (SSH는 텍스트 세션), 직접 그 자리에서 보거나 필요하면
   `x11vnc`로 그 물리 화면을 미러링해서 원격에서 볼 수 있음 (아직 설정 안 함).
-- `config.yaml`의 `server.host`는 아직 placeholder(`127.0.0.1`). 원격 서버 IP/포트와 설치된
-  CARLA 버전(`pip install carla==X`가 정확히 맞아야 handshake 성공)을 확인해서 채워야 함.
+- `config.yaml`의 `server.host`는 `ase-a71908.ece.utexas.edu`, `port`는 CARLA 기본값 2000으로
+  채워둠. 학교 네트워크 방화벽 때문에 2000번 포트로 직접 접속이 안 되면 SSH 터널
+  (`ssh -L 2000:localhost:2000 -L 2001:localhost:2001 ji5332@ase-a71908.ece.utexas.edu`)로
+  우회하고 `config.yaml`의 host를 `127.0.0.1`로 바꾸면 됨 — 아직 직접 접속 테스트는 안 해봄.
 
 ## 아직 안 한 것 / 다음 단계
-- [ ] `config.yaml` server.host를 실제 원격 IP로 채우기
-- [ ] 원격 서버의 CARLA 버전 확인 후 `pip install carla==<버전>`
-- [ ] `python replay.py`를 실제 CARLA 서버에 대고 첫 실행 — 좌표계 변환 가정 검증
-      (로컬 Mac엔 carla 패키지가 없어서 지금까지는 syntax/CSV 로더만 확인한 상태)
+- [x] `config.yaml` server.host를 실제 원격 주소로 채우기
+- [x] `requirements.txt`를 원격 서버 CARLA 버전(0.9.16)에 맞춤
+- [ ] 원격 머신에서 `~/Documents/carla`의 `.sh` 스크립트로 CARLA 서버 실행
+- [ ] Mac에서 `pip install -r requirements.txt` 후 `python replay.py`로 첫 접속 테스트
+      — 포트 2000 직접 접속 안 되면 위 SSH 터널 방식으로 재시도
+- [ ] 접속 성공하면 좌표계 변환 가정(`flip_y`, `negate_yaw`) 검증 — 차량이 예상 방향대로 도는지 확인
 - [ ] (선택) x11vnc 설정해서 Mac에서도 원격 화면 보기
 - [ ] Julia 쪽 실제 trajectory 생성 코드를 `export_trajectory.jl` 스키마에 맞춰 연결
 - [ ] 바퀴 회전, 조향 시각화, 차체 기울임 등 현실감 개선 (v1)
