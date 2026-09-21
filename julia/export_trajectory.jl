@@ -1,12 +1,12 @@
 """
     export_trajectory(path, t, agent_id, x, y, z, yaw, speed)
 
-CARLA 시각화 스크립트(`python/replay.py`)가 읽는 스키마로 trajectory를 CSV로 저장.
-표준 라이브러리만 사용 (DataFrames/CSV.jl 의존성 없음).
+Write a trajectory as CSV in the schema `python/replay.py` reads.
+Stdlib only, no DataFrames/CSV.jl dependency.
 
-좌표계는 오른손 좌표계 기준: x=forward, y=left, yaw=CCW(rad), 단위는 m, m/s.
-다른 convention을 쓴다면 CARLA/config.yaml의 coordinate_transform 값을 맞춰서 조정.
-여러 agent가 하나의 타임라인을 공유하면 agent_id로 구분 (문자열/숫자 아무거나, CSV에는 문자열로 기록됨).
+Right-handed frame: x=forward, y=left, yaw=CCW (rad), units m, m/s.
+Adjust CARLA/config.yaml's coordinate_transform if your convention differs.
+Multiple agents can share one timeline via agent_id (any type, written as a string).
 """
 function export_trajectory(path::AbstractString, t, agent_id, x, y, z, yaw, speed)
     n = length(t)
@@ -20,7 +20,7 @@ function export_trajectory(path::AbstractString, t, agent_id, x, y, z, yaw, spee
     return path
 end
 
-# 사용 예시 (실제 trajectory 계산 결과로 교체)
+# Example usage (replace with a real trajectory)
 if abspath(PROGRAM_FILE) == @__FILE__
     t = collect(0.0:0.5:4.5)
     n = length(t)

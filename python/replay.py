@@ -19,17 +19,39 @@ import yaml
 from trajectory_io import Waypoint, group_by_agent, load_trajectory
 
 
-def to_carla_transform(wp: Waypoint, cfg: dict, z_offset: float) -> carla.Transform:
+def recenter_waypoints(waypoints: list[Waypoint]) -> None:
+    """Shift all waypoints in place so their x/y bounding-box center is at (0, 0)."""
+    xs = [wp.x for wp in waypoints]
+    ys = [wp.y for wp in waypoints]
+    center_x = (min(xs) + max(xs)) / 2
+    center_y = (min(ys) + max(ys)) / 2
+    for wp in waypoints:
+        wp.x -= center_x
+        wp.y -= center_y
+
+
+def to_carla_transform(wp: Waypoint, cfg: dict, z_offset: float, scale: float) -> carla.Transform:
     y = -wp.y if cfg["flip_y"] else wp.y
     yaw_rad = -wp.yaw if cfg["negate_yaw"] else wp.yaw
-    location = carla.Location(x=wp.x, y=y, z=wp.z + z_offset)
+    offset = cfg.get("origin_offset", {"x": 0.0, "y": 0.0})
+    location = carla.Location(x=wp.x * scale + offset["x"], y=y * scale + offset["y"], z=wp.z * scale + z_offset)
     rotation = carla.Rotation(pitch=0.0, yaw=math.degrees(yaw_rad), roll=0.0)
     return carla.Transform(location, rotation)
 
 
-def spawn_vehicle(world: carla.World, blueprint_name: str, transform: carla.Transform):
+def resolve_vehicle_spec(agent_id: str, vehicle_cfg: dict) -> tuple[str, str | None]:
+    """Per-agent blueprint/color from vehicle_cfg["by_agent"], falling back to defaults."""
+    spec = vehicle_cfg.get("by_agent", {}).get(str(agent_id), {})
+    blueprint = spec.get("blueprint", vehicle_cfg["blueprint"])
+    color = spec.get("color", vehicle_cfg.get("color"))
+    return blueprint, color
+
+
+def spawn_vehicle(world: carla.World, blueprint_name: str, color: str | None, transform: carla.Transform):
     bp_library = world.get_blueprint_library()
     blueprint = bp_library.find(blueprint_name)
+    if color and blueprint.has_attribute("color"):
+        blueprint.set_attribute("color", color)
     vehicle = world.spawn_actor(blueprint, transform)
     vehicle.set_simulate_physics(False)
     return vehicle
@@ -55,13 +77,21 @@ def advance_cursor(wps: list[Waypoint], cursor: int, t: float) -> int:
     return cursor
 
 
-def run(config_path: str, trajectory_path: str, speed_factor_override: float | None = None):
+def run(
+    config_path: str,
+    trajectory_path: str,
+    speed_factor_override: float | None = None,
+    scale_override: float | None = None,
+):
     with open(config_path) as f:
         cfg = yaml.safe_load(f)
 
     waypoints = load_trajectory(trajectory_path)
     if not waypoints:
         raise ValueError(f"No waypoints found in {trajectory_path}")
+
+    if cfg["coordinate_transform"].get("center_on_offset", False):
+        recenter_waypoints(waypoints)
 
     agents = group_by_agent(waypoints)
     timeline = sorted({wp.t for wp in waypoints})
@@ -74,24 +104,43 @@ def run(config_path: str, trajectory_path: str, speed_factor_override: float | N
     else:
         world = client.get_world()
 
+    default_camera = cfg["playback"].get("default_camera")
+    if default_camera:
+        world.get_spectator().set_transform(
+            carla.Transform(
+                carla.Location(x=default_camera["x"], y=default_camera["y"], z=default_camera["z"]),
+                carla.Rotation(pitch=default_camera["pitch"], yaw=default_camera["yaw"], roll=default_camera["roll"]),
+            )
+        )
+
     z_offset = cfg["vehicle"]["z_offset"]
     coord_cfg = cfg["coordinate_transform"]
     speed_factor = speed_factor_override if speed_factor_override is not None else cfg["playback"]["speed_factor"]
+    scale = scale_override if scale_override is not None else coord_cfg.get("scale", 1.0)
 
     vehicles = {}
     cursors = {agent_id: 0 for agent_id in agents}
-    for agent_id, wps in agents.items():
-        transform = to_carla_transform(wps[0], coord_cfg, z_offset)
-        vehicles[agent_id] = spawn_vehicle(world, cfg["vehicle"]["blueprint"], transform)
-
     try:
+        for agent_id, wps in agents.items():
+            transform = to_carla_transform(wps[0], coord_cfg, z_offset, scale)
+            # Agents can start closer together than a vehicle's bounding box, which trips
+            # CARLA's spawn-time collision check. Spawn high up, then drop into place.
+            spawn_transform = carla.Transform(
+                carla.Location(transform.location.x, transform.location.y, transform.location.z + 50.0),
+                transform.rotation,
+            )
+            blueprint_name, color = resolve_vehicle_spec(agent_id, cfg["vehicle"])
+            vehicle = spawn_vehicle(world, blueprint_name, color, spawn_transform)
+            vehicle.set_transform(transform)
+            vehicles[agent_id] = vehicle
+
         prev_t = timeline[0]
         for t in timeline:
             transforms = []
             for agent_id, wps in agents.items():
                 cursors[agent_id] = advance_cursor(wps, cursors[agent_id], t)
                 wp = wps[cursors[agent_id]]
-                transform = to_carla_transform(wp, coord_cfg, z_offset)
+                transform = to_carla_transform(wp, coord_cfg, z_offset, scale)
                 vehicles[agent_id].set_transform(transform)
                 transforms.append(transform)
 
@@ -127,5 +176,11 @@ if __name__ == "__main__":
         default=None,
         help="Override playback.speed_factor from config.yaml (e.g. 0.05 to play a short trajectory in slow motion)",
     )
+    parser.add_argument(
+        "--scale",
+        type=float,
+        default=None,
+        help="Override coordinate_transform.scale from config.yaml (e.g. 2.0 to double the trajectory's spatial extent)",
+    )
     args = parser.parse_args()
-    run(args.config, args.trajectory, args.speed_factor)
+    run(args.config, args.trajectory, args.speed_factor, args.scale)

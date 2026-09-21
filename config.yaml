@@ -1,27 +1,56 @@
 # CARLA server connection
-# 원격 머신: ssh ji5332@ase-a71908.ece.utexas.edu, ~/Documents/carla 에서 CarlaUE4.sh 실행
+# Remote: ssh ji5332@ase-a71908.ece.utexas.edu, run CarlaUE4.sh in ~/Documents/carla
 server:
-  host: "ase-a71908.ece.utexas.edu"
+  host: "127.0.0.1"
   port: 2000
   timeout: 10.0        # seconds
 
-# Optional: 특정 맵으로 전환 (null이면 서버에 이미 로드된 맵 사용)
+# Map to load (null = use whatever the server already has loaded)
 map: null
 
-# 시각화에 사용할 차량 blueprint
+# Vehicle blueprint. by_agent overrides fall back to these defaults.
+# hospital_trajectory.csv mapping (2026-09-21): agent 1 = high priority
+# (ambulance), 4 = low priority (cargo truck), 2/3 = medium (tesla, default).
 vehicle:
   blueprint: "vehicle.tesla.model3"
-  z_offset: 0.3         # 지면 클리핑 방지용 스폰 높이 보정 (m)
+  color: null            # null = blueprint default (tesla assigns randomly)
+  z_offset: 0.3         # spawn height, avoids ground clipping (m)
+  by_agent:
+    "1":
+      blueprint: "vehicle.ford.ambulance"
+      color: "231,231,231"   # only recommended color for this blueprint
+    "4":
+      blueprint: "vehicle.carlamotors.carlacola"
+      color: "255,68,0"      # recommended color for this blueprint
 
-# 좌표계 변환: Julia가 오른손 좌표계(x: forward, y: left, yaw: CCW, rad)로
-# trajectory를 낸다고 가정. CARLA는 왼손 좌표계(x: forward, y: right, yaw: CW, deg)이므로
-# 기본값으로 y와 yaw 부호를 뒤집음. Julia 쪽 convention이 다르면 여기서 끄면 됨.
+# Assumes Julia uses a right-handed frame (x=forward, y=left, yaw=CCW, rad).
+# CARLA is left-handed (x=forward, y=right, yaw=CW, deg), so flip by default.
 coordinate_transform:
   flip_y: true
   negate_yaw: true
+  scale: 7.0              # uniform scale on x/y/z, not yaw; override with --scale
+  center_on_offset: true  # recenter trajectory's bbox center onto origin_offset
+  # Map location for that center. Set to junction 189's center in
+  # Town10HD_Opt; adjust for other maps/scenarios.
+  origin_offset:
+    x: -47.8
+    y: 20.4
 
-# 재생 설정
+# Playback
 playback:
-  speed_factor: 1.0     # 1.0 = trajectory의 timestamp 그대로, 2.0 = 2배속
-  follow_camera: true    # spectator가 차량을 따라가도록
+  speed_factor: 1.0     # 1.0 = real time, 2.0 = 2x speed
+  # true: spectator snaps to a top-down view centered on all agents every
+  # frame (jitters as the centroid shifts). false: leave spectator alone.
+  follow_camera: false
   show_speed_label: true
+  # Spectator transform applied once at start, regardless of follow_camera.
+  # Captured from CARLA while framing the hospital scenario (2026-09-21):
+  #   python3 -c "import carla; c=carla.Client('127.0.0.1',2000); c.set_timeout(10.0); \
+  #   t=c.get_world().get_spectator().get_transform(); print(t)"
+  default_camera:
+    x: -48.435722
+    y: 19.877296
+    z: 53.918205
+    pitch: -90.0
+    yaw: 0.0
+    roll: 0.0

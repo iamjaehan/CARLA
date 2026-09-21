@@ -1,97 +1,146 @@
 # CARLA trajectory visualization
 
-## 목표
-Julia로 미리 계산한 trajectory(위치/방향/속도)를 CARLA 상에서 시각화. 실시간 반영 불필요 —
-trajectory를 먼저 다 구한 뒤 사후에 재생하는 방식. discrete하게 끊긴 waypoint를 그대로 재생하고,
-interpolation은 나중 과제로 미룸. CARLA 자체의 vehicle physics/dynamics는 꺼두고 위치를 강제로
-박아넣는 v0에서 시작, 이후 바퀴 회전/조향 시각화/기울임 등 현실감 있는 표현을 추가할 예정.
-하나 이상의 agent(멀티에이전트 시나리오 포함)를 같은 타임라인으로 재생할 수 있음.
+## Goal
+Visualize a Julia-precomputed trajectory (position/heading/speed) in CARLA.
+No real-time coupling — compute the full trajectory first, replay it after.
+Discrete waypoints played back as-is; interpolation is future work.
+v0: CARLA vehicle physics off, position forced via transform. Later: wheel
+rotation, steering, body lean. Supports one or more agents on a shared timeline.
 
-## 구조
+## Layout
 ```
-config.yaml                  CARLA 서버 접속 정보, 좌표계 변환, 재생 옵션
-requirements.txt             pip 의존성 (carla는 서버 버전과 정확히 맞춰야 함)
-data/example_trajectory.csv  t,agent_id,x,y,z,yaw,speed 스키마 샘플 (단일 agent, 곡선 경로)
-data/hospital_trajectory.csv Reduced-GOOP의 실제 hospital MPC 결과 (4 agent, 5초, 51 스텝)
-julia/export_trajectory.jl   이 스키마로 CSV 내보내는 헬퍼 (표준 라이브러리만 사용, 의존성 없음)
-python/trajectory_io.py      CSV -> Waypoint 리스트 로더, agent_id로 그룹핑
-python/replay.py             CARLA 접속, agent별 차량 스폰, physics 끄고 waypoint마다 set_transform
+config.yaml                  server connection, coordinate transform, playback options
+requirements.txt             pip deps (carla version must match the server exactly)
+data/example_trajectory.csv  t,agent_id,x,y,z,yaw,speed sample (single agent, curved path)
+data/hospital_trajectory.csv real Reduced-GOOP hospital MPC result (4 agents, 5s, 51 steps)
+julia/export_trajectory.jl   CSV exporter for this schema (stdlib only, no deps)
+python/trajectory_io.py      CSV -> Waypoint list, grouped by agent_id
+python/replay.py             connects to CARLA, spawns per-agent vehicles, set_transform per waypoint
 ```
 
-CARLA 브랜치 밖에는 아무것도 커밋하지 않음 — 이 레포(CARLA)에서만 git add/commit/push.
-다른 레포(`../Reduced-GOOP`, `../ScholtesReducedGOOP.jl`)에 테스트/연동용 export 스크립트를
-파일로는 추가해뒀지만, 그쪽 레포에 커밋하는 건 각자 알아서 할 일 — 여기서 건드리지 않음.
-그 스크립트들로 뽑은 trajectory를 CARLA/data/에 복사해서 test fixture로만 씀.
+Only commit within this repo (CARLA) — nothing in `../Reduced-GOOP` or
+`../ScholtesReducedGOOP.jl` gets committed from here, even though export
+scripts were added to those repos as files. Their output gets copied into
+`CARLA/data/` as test fixtures.
 
 ```
-../Reduced-GOOP/experiments/export_to_carla.jl   (커밋 안 함, 파일만 존재)
-    hospital MPC 시나리오의 기존 결과(mpc_solution.jld2, closed-loop 여러 스텝)를
-    CARLA/data 스키마로 export. 상태가 위치(x,y)뿐이라 yaw/speed는 각 스텝의
-    control u=(ux,uy)에서 유도 (yaw=atan(uy,ux), speed=‖u‖). 새 solve를 돌리지 않고
-    이미 저장된 run_dir(mpc_solution.jld2가 있는 폴더)을 읽기만 함. 실행:
+../Reduced-GOOP/experiments/export_to_carla.jl   (not committed, file only)
+    Exports an existing hospital MPC result (mpc_solution.jld2) to the CARLA
+    schema. State is position-only, so yaw/speed are derived from each step's
+    control u=(ux,uy): yaw=atan(uy,ux), speed=‖u‖. Reads an existing run_dir,
+    doesn't resolve. Run:
     `cd ../Reduced-GOOP && julia --project=. experiments/export_to_carla.jl <run_dir> [output_path]`
-    data/hospital_trajectory.csv는 이걸로
-    `data/Hospital_open_loop/debug/2026-08-11T08-41-41`에서 뽑아 복사해온 것.
+    data/hospital_trajectory.csv came from
+    `data/Hospital_open_loop/debug/2026-08-11T08-41-41`.
 
-../ScholtesReducedGOOP.jl/examples/hospital_to_carla.jl   (커밋 안 함, 파일만 존재)
-    같은 목적이지만 포팅된 단일-shot 버전(hospital.jl, 3 agent, 0.3초)을 매번 새로
-    solve해서 export. 지금은 안 씀 — Reduced-GOOP의 실제 MPC 결과가 더 나은 테스트
-    데이터라 그걸로 교체함. 필요하면 여전히 쓸 수 있음.
+../ScholtesReducedGOOP.jl/examples/hospital_to_carla.jl   (not committed, file only)
+    Same purpose, ported single-shot version (hospital.jl, 3 agents, 0.3s),
+    resolves fresh each time. Unused now — the real MPC result is a better
+    fixture. Still usable if needed.
 ```
 
-## 핵심 설계 결정
-- `vehicle.set_simulate_physics(False)`로 CARLA dynamics를 끄고, 매 waypoint를
-  `set_transform()`으로 그대로 반영하는 방식 (v0). `replay.py` 참고.
-- 멀티에이전트: agent_id별로 waypoint를 그룹핑해서 각자 vehicle을 하나씩 스폰. 전체
-  타임라인(모든 agent의 t를 합쳐 정렬한 값)을 돌면서, 각 agent는 자기 마지막 waypoint 값을
-  그대로 hold(step function, interpolation 없음). 카메라는 개별 추적이 아니라 전체 agent
-  중심의 top-down 뷰(`update_spectator_topdown`)로 통일.
-- 좌표계 변환(`config.yaml`의 `coordinate_transform.flip_y`, `negate_yaw`)은
-  Julia가 오른손 좌표계(x=forward, y=left, yaw=CCW, rad)를 쓴다는 **가정** 하에 기본값을
-  잡아둔 것. CARLA는 왼손 좌표계(x=forward, y=right, yaw=CW, deg)라 y/yaw 부호를 뒤집음.
-  **아직 실제 CARLA에서 검증 안 됨** — 처음 돌려볼 때 차량이 예상 방향대로 도는지 꼭 확인할 것.
-- 재생 속도는 `time.sleep` 기반. `config.yaml`의 `playback.speed_factor` 또는
-  `replay.py --speed-factor`로 배속 조절 (커맨드라인 인자가 우선). 나중에 synchronous
-  mode(`fixed_delta_seconds`)로 바꾸면 더 결정론적으로 재생 가능.
-- 속도는 `world.debug.draw_string`으로 차량 위에 `"{agent_id}: {speed} m/s"` 텍스트 표시만 함
-  (v0). 화살표/바퀴 회전 등은 미구현.
-- `data/hospital_trajectory.csv`는 `Δt=0.1`, 51스텝, 총 5초짜리 실제 closed-loop MPC
-  결과라 `speed_factor=1.0` 그대로도 눈으로 보기엔 충분함 (급하면 `--speed-factor`로 배속 조절).
-- hospital 시나리오는 초기 위치들이 서로 1~4m 거리라, 스폰 지점이 CARLA 맵의 건물/도로 중간에
-  겹치거나 지형 고도와 안 맞아서 `spawn_actor`가 실패할 수 있음 — **아직 실제 CARLA에서 검증
-  안 됨**. 실패하면 좌표에 global offset을 주거나 맵의 뻥 뚫린 구역으로 이동시켜서 재시도.
+## Key decisions
+- `vehicle.set_simulate_physics(False)` + `set_transform()` per waypoint (v0). See `replay.py`.
+- Multi-agent: waypoints grouped by agent_id, one vehicle each. Each agent holds
+  its last waypoint (step function, no interpolation) as the shared timeline advances.
+- Camera: `playback.follow_camera: true` recenters the spectator to a top-down
+  view of all agents every frame — confirmed this jitters, since the centroid
+  shifts slightly each frame (2026-09-21, hospital_trajectory.csv visual test).
+  **Default is now `false`**: `replay.py` leaves the spectator alone, so whatever
+  view was set in the CARLA window before running stays put (verified spectator
+  transform is identical before/after a run).
+- `playback.default_camera`: spectator transform applied once at start,
+  regardless of `follow_camera`. Current value was captured from the CARLA
+  window on 2026-09-21 while framing the hospital scenario (verified it's
+  restored exactly even if something else moves the spectator mid-spawn).
+- `vehicle.by_agent` in `config.yaml`: per-agent blueprint/color override,
+  falls back to the top-level default. Confirmed `vehicle.ford.ambulance` and
+  `vehicle.carlamotors.carlacola` exist in CARLA 0.9.16 and support `color`.
+  Current hospital_trajectory.csv mapping (2026-09-21, user-confirmed): agent
+  1 = high priority (ambulance), 4 = low priority (cargo truck), 2/3 = medium
+  (tesla model3, default). Verified by spawning each and checking type_id.
+- Coordinate transform (`flip_y`, `negate_yaw`) assumes Julia uses a
+  right-handed frame (x=forward, y=left, yaw=CCW, rad); CARLA is left-handed
+  (x=forward, y=right, yaw=CW, deg). **Not yet visually verified in CARLA** —
+  playback runs without errors, but turning direction hasn't been eyeballed.
+- `origin_offset` / `scale` / `center_on_offset`: visualization-only transform,
+  applied in memory by `replay.py` — never touches the source CSV (especially
+  hospital_trajectory.csv, which is a real MPC result).
+  - `center_on_offset: true` recenters the trajectory's x/y bounding-box
+    center onto `origin_offset`, regardless of the file's original local origin.
+  - `scale` multiplies x/y/z after recentering (not yaw). hospital_trajectory.csv
+    is ~4m natively (indoor-robot scale), needs ~6-7x to read clearly in a
+    Town10HD_Opt junction; example_trajectory.csv (~16.5x14.5m) needs less
+    (`--scale 2.0`) — scale differs per file, so override at runtime. Note:
+    the `speed` label shows the CSV's raw value, not adjusted for scale.
+  - `origin_offset` exists because world origin (0,0) overlaps a building in
+    Town10HD_Opt — spawn collision is no longer an issue (vehicles spawn
+    airborne and drop in), but placement still matters visually. Set to
+    junction 189's center (-47.8, 20.4), bbox ~38.2 x 44.3m. Re-tune for
+    other maps/scenarios.
+- Spawning multiple agents closer together than a vehicle's bounding box
+  (e.g. hospital scenario, 1-4m apart) trips CARLA's spawn-time collision
+  check. `replay.py` spawns 50m up, then `set_transform()`s down — bypasses
+  spawn collision but vehicles can visually overlap on the first frame
+  (known v0 limitation, same bucket as interpolation).
+- Playback paced with `time.sleep`; `playback.speed_factor` or
+  `replay.py --speed-factor` (CLI wins). Switching to synchronous mode
+  (`fixed_delta_seconds`) later would make timing more deterministic.
+- Speed shown via `world.debug.draw_string` as `"{agent_id}: {speed} m/s"`
+  above each vehicle (v0). No arrows/wheel rotation yet.
+- `data/hospital_trajectory.csv` (Δt=0.1, 51 steps, 5s real closed-loop MPC)
+  reads fine at `speed_factor=1.0`; use `--speed-factor` to adjust if needed.
 
-## 원격 환경
-- CARLA 서버(시뮬레이터 본체)는 별도 원격 머신에서 실행 (GPU 필요, macOS는 공식 미지원).
-  접속: `ssh ji5332@ase-a71908.ece.utexas.edu`
-- CARLA 설치 위치: 그 머신의 `~/Documents/carla`, 실행은 그 안의 `.sh` 스크립트
-  (보통 `CarlaUE4.sh`, 정확한 파일명은 `ls ~/Documents/carla`로 확인).
-- CARLA 버전: **0.9.16** → `requirements.txt`에 `carla==0.9.16`으로 고정해둠.
-- **첫 테스트는 원격 머신에 직접 가서, 서버·클라이언트를 둘 다 localhost로 돌리는 걸 권장**
-  (네트워크/방화벽/VNC 관련 변수를 다 제거하고 파이프라인 로직 자체만 검증하기 위함). 이 경우
-  `config.yaml`의 `server.host`를 `127.0.0.1`로 바꿔야 함 — 아직 안 바꿔둠 (원격 주소로
-  되어있음), 로컬 테스트 시작할 때 바꿀 것.
-- 나중에 Mac에서 원격으로 접속하는 구조로 돌아갈 때 참고할 것들:
-  - 모니터가 원격 머신에 물리적으로 연결돼 있어서, SSH만으로는 화면이 안 보임. 직접 그
-    자리에서 보거나 `x11vnc`로 그 물리 화면을 미러링 (아직 설정 안 함).
-  - 학교 네트워크 방화벽 때문에 2000번 포트로 직접 접속이 안 되면 SSH 터널
-    (`ssh -L 2000:localhost:2000 -L 2001:localhost:2001 ji5332@ase-a71908.ece.utexas.edu`)로
-    우회하고 `config.yaml`의 host를 `127.0.0.1`로.
+## Remote environment
+- CARLA server runs on a separate remote machine (needs GPU, no official macOS
+  support). `ssh ji5332@ase-a71908.ece.utexas.edu`.
+- Install path: `~/Documents/carla`, launched via its `.sh` script (usually
+  `CarlaUE4.sh` — confirm with `ls ~/Documents/carla`).
+- CARLA version: **0.9.16**, pinned in `requirements.txt`.
+- **Recommended first test: go to the remote machine and run server+client
+  both on localhost** (removes network/firewall/VNC variables, isolates the
+  pipeline logic). Needs `config.yaml`'s `server.host` set to `127.0.0.1`.
+  **2026-09-21**: done this way, on a machine with hostname `asg-a69681`
+  (different from `ase-a71908.ece.utexas.edu`, but same CARLA 0.9.16 install
+  under `~/Documents/carla`, GPU (RTX 3070), DISPLAY (:1) — re-check `hostname`
+  if unsure). `server.host` is committed as `127.0.0.1` right now —
+  **switch back to the real remote address when returning to Mac↔server**.
+  Both example_trajectory.csv and hospital_trajectory.csv run to completion
+  without errors via `CarlaUE4.sh -windowed` + `python replay.py` (see "Key
+  decisions" above for origin_offset/spawn workaround). **Coordinate-transform
+  direction still needs a visual check.**
+- For later, going back to Mac ↔ remote:
+  - Monitor is physically attached to the remote machine — SSH alone shows no
+    display. Either sit at the machine, or mirror it with `x11vnc` (not set up yet).
+  - If campus firewall blocks port 2000 directly, tunnel with
+    `ssh -L 2000:localhost:2000 -L 2001:localhost:2001 ji5332@ase-a71908.ece.utexas.edu`
+    and set `config.yaml`'s host to `127.0.0.1`.
 
-## 아직 안 한 것 / 다음 단계
-- [x] `config.yaml` server.host를 실제 원격 주소로 채우기 (로컬 테스트 시엔 127.0.0.1로 바꿀 것)
-- [x] `requirements.txt`를 원격 서버 CARLA 버전(0.9.16)에 맞춤
-- [x] 멀티에이전트 지원 (`replay.py`, `trajectory_io.py`) + hospital MPC 결과 export
-      (Reduced-GOOP의 `export_to_carla.jl`, 커밋 안 함) — 로컬에서 Julia 실행 및 CSV 파싱까지는
-      검증함, **CARLA 연결 자체는 아직 한 번도 테스트 안 해봄** (로컬 Mac엔 carla 패키지 없음)
-- [ ] 원격 머신에서 `~/Documents/carla`의 `.sh` 스크립트로 CARLA 서버 실행
-- [ ] 같은 머신에서 `config.yaml`의 host를 `127.0.0.1`로 바꾸고 `pip install -r requirements.txt`
-      후 `python replay.py`로 첫 접속 테스트 (example_trajectory.csv, 단일 agent부터)
-- [ ] 접속 성공하면 좌표계 변환 가정(`flip_y`, `negate_yaw`) 검증 — 차량이 예상 방향대로 도는지 확인
-- [ ] hospital_trajectory.csv로 멀티에이전트 테스트 (4 agent, 5초), spawn 실패 시 좌표 offset 조정
-- [ ] (선택) 이후 Mac ↔ 원격 구조로 돌아갈 때 SSH 터널 or x11vnc 설정
-- [ ] Julia 쪽 실제 trajectory 생성 코드를 `export_trajectory.jl` 스키마에 맞춰 연결
-- [ ] 바퀴 회전, 조향 시각화, 차체 기울임 등 현실감 개선 (v1)
+## Not done yet / next steps
+- [x] Fill in `config.yaml` server.host with the real remote address (switch to 127.0.0.1 for local testing)
+- [x] Match `requirements.txt` to the remote server's CARLA version (0.9.16)
+- [x] Multi-agent support (`replay.py`, `trajectory_io.py`) + hospital MPC export
+      (`export_to_carla.jl` in Reduced-GOOP, not committed) — Julia run and CSV
+      parsing verified locally; CARLA connection itself untested until now
+- [x] Ran CARLA server locally via `~/Documents/carla`'s `.sh` script (on a
+      machine matching the remote spec)
+- [x] First connection test on the same machine: host set to `127.0.0.1`,
+      `python replay.py` with example_trajectory.csv (single agent) — pip deps were already installed
+- [x] Multi-agent test with hospital_trajectory.csv (4 agents, 5s) — found and
+      fixed two spawn-collision issues (origin_offset, airborne spawn +
+      set_transform, orphaned-actor leak from the spawn loop being outside
+      try/finally). Both trajectories now run to completion
+- [x] Scaled hospital_trajectory.csv to junction 189's scale (`scale`,
+      `center_on_offset: true`) — visually confirmed in the CARLA window (2026-09-21)
+- [x] Found and fixed per-frame camera jitter — `follow_camera` was
+      re-centering every frame; now defaults to `false` so the pre-set CARLA view holds
+- [ ] Playback runs cleanly, but coordinate-transform direction (`flip_y`,
+      `negate_yaw`) still needs a visual check — confirm vehicles turn the expected way
+- **Currently testing with hospital_trajectory.csv only** (2026-09-21~) —
+  example_trajectory.csv is parked, revisit when needed
+- [ ] (optional) SSH tunnel or x11vnc setup for Mac ↔ remote later
+- [ ] Wire up the real Julia trajectory-generation code to the `export_trajectory.jl` schema
+- [ ] Wheel rotation, steering visualization, body lean (v1)
 
 ## Git
 - remote: `git@github.com:iamjaehan/CARLA.git` (origin), branch `master`
