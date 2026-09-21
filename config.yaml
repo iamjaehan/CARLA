@@ -28,7 +28,7 @@ vehicle:
 coordinate_transform:
   flip_y: true
   negate_yaw: true
-  scale: 7.0              # uniform scale on x/y/z, not yaw; override with --scale
+  scale: 8.0              # uniform scale on x/y/z, not yaw; override with --scale
   center_on_offset: true  # recenter trajectory's bbox center onto origin_offset
   # Map location for that center. Set to junction 189's center in
   # Town10HD_Opt; adjust for other maps/scenarios.
@@ -39,6 +39,7 @@ coordinate_transform:
 # Playback
 playback:
   speed_factor: 1.0     # 1.0 = real time, 2.0 = 2x speed
+  interpolate_hz: 60.0   # resample onto a uniform grid at this rate; 0 disables (see interpolate.py)
   # true: spectator snaps to a top-down view centered on all agents every
   # frame (jitters as the centroid shifts). false: leave spectator alone.
   follow_camera: false

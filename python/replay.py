@@ -2,7 +2,7 @@
 
 Supports one or more agents sharing a timeline (see trajectory_io.py schema).
 Each agent gets its own vehicle actor; between two of an agent's waypoints its
-transform just holds the last value (no interpolation yet).
+transform just holds the last value unless interpolate.py has densified them.
 
 Usage:
     python replay.py --config ../config.yaml --trajectory ../data/example_trajectory.csv
@@ -16,6 +16,7 @@ import time
 import carla
 import yaml
 
+from interpolate import estimate_source_hz, interpolate_trajectory
 from trajectory_io import Waypoint, group_by_agent, load_trajectory
 
 
@@ -82,6 +83,7 @@ def run(
     trajectory_path: str,
     speed_factor_override: float | None = None,
     scale_override: float | None = None,
+    interpolate_hz_override: float | None = None,
 ):
     with open(config_path) as f:
         cfg = yaml.safe_load(f)
@@ -89,6 +91,14 @@ def run(
     waypoints = load_trajectory(trajectory_path)
     if not waypoints:
         raise ValueError(f"No waypoints found in {trajectory_path}")
+
+    interpolate_hz = (
+        interpolate_hz_override if interpolate_hz_override is not None else cfg["playback"].get("interpolate_hz", 0)
+    )
+    if interpolate_hz:
+        source_hz = estimate_source_hz(waypoints)
+        waypoints = interpolate_trajectory(waypoints, interpolate_hz)
+        print(f"Interpolated ~{source_hz:.1f}Hz -> {interpolate_hz:.1f}Hz ({len(waypoints)} waypoints)")
 
     if cfg["coordinate_transform"].get("center_on_offset", False):
         recenter_waypoints(waypoints)
@@ -182,5 +192,11 @@ if __name__ == "__main__":
         default=None,
         help="Override coordinate_transform.scale from config.yaml (e.g. 2.0 to double the trajectory's spatial extent)",
     )
+    parser.add_argument(
+        "--interpolate-hz",
+        type=float,
+        default=None,
+        help="Override playback.interpolate_hz from config.yaml (0 disables interpolation)",
+    )
     args = parser.parse_args()
-    run(args.config, args.trajectory, args.speed_factor, args.scale)
+    run(args.config, args.trajectory, args.speed_factor, args.scale, args.interpolate_hz)

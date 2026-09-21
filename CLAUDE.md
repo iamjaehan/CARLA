@@ -3,7 +3,7 @@
 ## Goal
 Visualize a Julia-precomputed trajectory (position/heading/speed) in CARLA.
 No real-time coupling — compute the full trajectory first, replay it after.
-Discrete waypoints played back as-is; interpolation is future work.
+Discrete waypoints, optionally densified by linear interpolation (see below).
 v0: CARLA vehicle physics off, position forced via transform. Later: wheel
 rotation, steering, body lean. Supports one or more agents on a shared timeline.
 
@@ -15,6 +15,7 @@ data/example_trajectory.csv  t,agent_id,x,y,z,yaw,speed sample (single agent, cu
 data/hospital_trajectory.csv real Reduced-GOOP hospital MPC result (4 agents, 5s, 51 steps)
 julia/export_trajectory.jl   CSV exporter for this schema (stdlib only, no deps)
 python/trajectory_io.py      CSV -> Waypoint list, grouped by agent_id
+python/interpolate.py        resamples waypoints onto a uniform-Hz grid (linear + shortest-angle yaw)
 python/replay.py             connects to CARLA, spawns per-agent vehicles, set_transform per waypoint
 ```
 
@@ -42,7 +43,17 @@ scripts were added to those repos as files. Their output gets copied into
 ## Key decisions
 - `vehicle.set_simulate_physics(False)` + `set_transform()` per waypoint (v0). See `replay.py`.
 - Multi-agent: waypoints grouped by agent_id, one vehicle each. Each agent holds
-  its last waypoint (step function, no interpolation) as the shared timeline advances.
+  its last waypoint (step function) as the shared timeline advances.
+- `python/interpolate.py` (new, 2026-09-21): resamples every agent onto a
+  shared uniform grid at `playback.interpolate_hz` (default 60, `--interpolate-hz`
+  overrides, 0 disables). x/y/z/speed are linear; yaw uses shortest-angle
+  interpolation (wraps through the near side of ±π, not through 0). Grid spans
+  the trajectory's own [min t, max t] — densifies below `interpolate_hz`,
+  decimates above it. Kept separate from `replay.py` so the interpolation
+  method can change (spline, etc.) without touching playback. Verified against
+  hospital_trajectory.csv (10Hz source -> 60Hz, 51 -> 301 points/agent) and a
+  yaw-wraparound unit case; real-time playback wall time barely changed
+  despite 6x more `set_transform`/RPC calls.
 - Camera: `playback.follow_camera: true` recenters the spectator to a top-down
   view of all agents every frame — confirmed this jitters, since the centroid
   shifts slightly each frame (2026-09-21, hospital_trajectory.csv visual test).
@@ -82,7 +93,7 @@ scripts were added to those repos as files. Their output gets copied into
   (e.g. hospital scenario, 1-4m apart) trips CARLA's spawn-time collision
   check. `replay.py` spawns 50m up, then `set_transform()`s down — bypasses
   spawn collision but vehicles can visually overlap on the first frame
-  (known v0 limitation, same bucket as interpolation).
+  (known v0 limitation).
 - Playback paced with `time.sleep`; `playback.speed_factor` or
   `replay.py --speed-factor` (CLI wins). Switching to synchronous mode
   (`fixed_delta_seconds`) later would make timing more deterministic.
@@ -136,6 +147,9 @@ scripts were added to those repos as files. Their output gets copied into
       re-centering every frame; now defaults to `false` so the pre-set CARLA view holds
 - [ ] Playback runs cleanly, but coordinate-transform direction (`flip_y`,
       `negate_yaw`) still needs a visual check — confirm vehicles turn the expected way
+- [x] Added `python/interpolate.py` — resamples to `playback.interpolate_hz`
+      (default 60), linear x/y/z/speed + shortest-angle yaw. Verified against
+      hospital_trajectory.csv and a yaw-wraparound unit case (2026-09-21)
 - **Currently testing with hospital_trajectory.csv only** (2026-09-21~) —
   example_trajectory.csv is parked, revisit when needed
 - [ ] (optional) SSH tunnel or x11vnc setup for Mac ↔ remote later
