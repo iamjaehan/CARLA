@@ -12,20 +12,31 @@ interpolation은 나중 과제로 미룸. CARLA 자체의 vehicle physics/dynami
 config.yaml                  CARLA 서버 접속 정보, 좌표계 변환, 재생 옵션
 requirements.txt             pip 의존성 (carla는 서버 버전과 정확히 맞춰야 함)
 data/example_trajectory.csv  t,agent_id,x,y,z,yaw,speed 스키마 샘플 (단일 agent, 곡선 경로)
-data/hospital_trajectory.csv ScholtesReducedGOOP.jl hospital 시나리오 실제 output (3 agent, 0.3초짜리 궤적)
+data/hospital_trajectory.csv Reduced-GOOP의 실제 hospital MPC 결과 (4 agent, 5초, 51 스텝)
 julia/export_trajectory.jl   이 스키마로 CSV 내보내는 헬퍼 (표준 라이브러리만 사용, 의존성 없음)
 python/trajectory_io.py      CSV -> Waypoint 리스트 로더, agent_id로 그룹핑
 python/replay.py             CARLA 접속, agent별 차량 스폰, physics 끄고 waypoint마다 set_transform
 ```
 
-다른 레포에도 연동 파일이 있음:
+CARLA 브랜치 밖에는 아무것도 커밋하지 않음 — 이 레포(CARLA)에서만 git add/commit/push.
+다른 레포(`../Reduced-GOOP`, `../ScholtesReducedGOOP.jl`)에 테스트/연동용 export 스크립트를
+파일로는 추가해뒀지만, 그쪽 레포에 커밋하는 건 각자 알아서 할 일 — 여기서 건드리지 않음.
+그 스크립트들로 뽑은 trajectory를 CARLA/data/에 복사해서 test fixture로만 씀.
+
 ```
-../ScholtesReducedGOOP.jl/examples/hospital_to_carla.jl
-    hospital.jl (3-agent 병원 복도 시나리오)를 실행해서 나온 결과를
-    CARLA/data/ 스키마로 export. 상태가 위치(x,y)뿐이라 yaw/speed는 각 스텝의
-    control u=(ux,uy)에서 유도 (yaw=atan(uy,ux), speed=‖u‖). 실행:
-    `cd ../ScholtesReducedGOOP.jl && julia --project=. examples/hospital_to_carla.jl`
-    (output_path 인자 생략하면 기본으로 ../CARLA/data/hospital_trajectory.csv에 씀)
+../Reduced-GOOP/experiments/export_to_carla.jl   (커밋 안 함, 파일만 존재)
+    hospital MPC 시나리오의 기존 결과(mpc_solution.jld2, closed-loop 여러 스텝)를
+    CARLA/data 스키마로 export. 상태가 위치(x,y)뿐이라 yaw/speed는 각 스텝의
+    control u=(ux,uy)에서 유도 (yaw=atan(uy,ux), speed=‖u‖). 새 solve를 돌리지 않고
+    이미 저장된 run_dir(mpc_solution.jld2가 있는 폴더)을 읽기만 함. 실행:
+    `cd ../Reduced-GOOP && julia --project=. experiments/export_to_carla.jl <run_dir> [output_path]`
+    data/hospital_trajectory.csv는 이걸로
+    `data/Hospital_open_loop/debug/2026-08-11T08-41-41`에서 뽑아 복사해온 것.
+
+../ScholtesReducedGOOP.jl/examples/hospital_to_carla.jl   (커밋 안 함, 파일만 존재)
+    같은 목적이지만 포팅된 단일-shot 버전(hospital.jl, 3 agent, 0.3초)을 매번 새로
+    solve해서 export. 지금은 안 씀 — Reduced-GOOP의 실제 MPC 결과가 더 나은 테스트
+    데이터라 그걸로 교체함. 필요하면 여전히 쓸 수 있음.
 ```
 
 ## 핵심 설계 결정
@@ -44,9 +55,8 @@ python/replay.py             CARLA 접속, agent별 차량 스폰, physics 끄�
   mode(`fixed_delta_seconds`)로 바꾸면 더 결정론적으로 재생 가능.
 - 속도는 `world.debug.draw_string`으로 차량 위에 `"{agent_id}: {speed} m/s"` 텍스트 표시만 함
   (v0). 화살표/바퀴 회전 등은 미구현.
-- hospital 시나리오는 `DT=0.1`, `PLANNING_HORIZON=4` → 전체 재생 시간이 0.3초로 매우 짧음.
-  `--speed-factor 0.05` 정도로 슬로모션 걸어야 눈으로 보임 (예:
-  `python replay.py --trajectory ../data/hospital_trajectory.csv --speed-factor 0.05`).
+- `data/hospital_trajectory.csv`는 `Δt=0.1`, 51스텝, 총 5초짜리 실제 closed-loop MPC
+  결과라 `speed_factor=1.0` 그대로도 눈으로 보기엔 충분함 (급하면 `--speed-factor`로 배속 조절).
 - hospital 시나리오는 초기 위치들이 서로 1~4m 거리라, 스폰 지점이 CARLA 맵의 건물/도로 중간에
   겹치거나 지형 고도와 안 맞아서 `spawn_actor`가 실패할 수 있음 — **아직 실제 CARLA에서 검증
   안 됨**. 실패하면 좌표에 global offset을 주거나 맵의 뻥 뚫린 구역으로 이동시켜서 재시도.
@@ -71,15 +81,14 @@ python/replay.py             CARLA 접속, agent별 차량 스폰, physics 끄�
 ## 아직 안 한 것 / 다음 단계
 - [x] `config.yaml` server.host를 실제 원격 주소로 채우기 (로컬 테스트 시엔 127.0.0.1로 바꿀 것)
 - [x] `requirements.txt`를 원격 서버 CARLA 버전(0.9.16)에 맞춤
-- [x] 멀티에이전트 지원 (`replay.py`, `trajectory_io.py`) + hospital 시나리오 export
-      (`hospital_to_carla.jl`) — 로컬에서 Julia 실행 및 CSV 파싱까지는 검증함, **CARLA
-      연결 자체는 아직 한 번도 테스트 안 해봄** (로컬 Mac엔 carla 패키지 없음)
+- [x] 멀티에이전트 지원 (`replay.py`, `trajectory_io.py`) + hospital MPC 결과 export
+      (Reduced-GOOP의 `export_to_carla.jl`, 커밋 안 함) — 로컬에서 Julia 실행 및 CSV 파싱까지는
+      검증함, **CARLA 연결 자체는 아직 한 번도 테스트 안 해봄** (로컬 Mac엔 carla 패키지 없음)
 - [ ] 원격 머신에서 `~/Documents/carla`의 `.sh` 스크립트로 CARLA 서버 실행
 - [ ] 같은 머신에서 `config.yaml`의 host를 `127.0.0.1`로 바꾸고 `pip install -r requirements.txt`
       후 `python replay.py`로 첫 접속 테스트 (example_trajectory.csv, 단일 agent부터)
 - [ ] 접속 성공하면 좌표계 변환 가정(`flip_y`, `negate_yaw`) 검증 — 차량이 예상 방향대로 도는지 확인
-- [ ] hospital_trajectory.csv로 멀티에이전트 테스트 (`--speed-factor 0.05`), spawn 실패 시
-      좌표 offset 조정
+- [ ] hospital_trajectory.csv로 멀티에이전트 테스트 (4 agent, 5초), spawn 실패 시 좌표 offset 조정
 - [ ] (선택) 이후 Mac ↔ 원격 구조로 돌아갈 때 SSH 터널 or x11vnc 설정
 - [ ] Julia 쪽 실제 trajectory 생성 코드를 `export_trajectory.jl` 스키마에 맞춰 연결
 - [ ] 바퀴 회전, 조향 시각화, 차체 기울임 등 현실감 개선 (v1)
